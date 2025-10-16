@@ -318,12 +318,10 @@ static int pmw3610_set_interrupt(const struct device *dev, const bool en) {
     return ret;
 }
 
-static int pmw3610_async_init_power_up(const struct device *dev) {
-	int ret = pmw3610_write_reg(dev, PMW3610_REG_POWER_UP_RESET, PMW3610_POWERUP_CMD_RESET);
-    if (ret < 0) {
-        return ret;
-    }
-    return 0;
+static int paw3212_async_init_power_up(const struct device *dev)
+{
+	return reg_write(dev, PAW3212_REG_CONFIGURATION,
+			 PAW3212_CONFIG_CHIP_RESET);
 }
 
 static int pmw3610_async_init_clear_ob1(const struct device *dev) {
@@ -358,87 +356,68 @@ static int pmw3610_async_init_check_ob1(const struct device *dev) {
     return 0;
 }
 
-static int pmw3610_async_init_configure(const struct device *dev) {
-    int err = 0;
-    const struct pixart_config *config = dev->config;
+static int paw3212_async_init_configure(const struct device *dev)
+{
+	int err;
 
-    // clear motion registers first (required in datasheet)
-    for (uint8_t reg = 0x02; (reg <= 0x05) && !err; reg++) {
-        uint8_t buf[1];
-        err = pmw3610_read_reg(dev, reg, buf);
-    }
+	err = reg_write(dev, PAW3212_REG_WRITE_PROTECT, PAW3212_WPMAGIC);
+	if (!err) {
+		uint8_t mouse_option = 0;
 
-    if (!err) {
-        err = pmw3610_set_performance(dev, true);
-    }
+		if (IS_ENABLED(CONFIG_PAW3212_ORIENTATION_90)) {
+			mouse_option |= PAW3212_MOUSE_OPT_XY_SWAP |
+					PAW3212_MOUSE_OPT_Y_INV;
+		} else if (IS_ENABLED(CONFIG_PAW3212_ORIENTATION_180)) {
+			mouse_option |= PAW3212_MOUSE_OPT_Y_INV |
+					PAW3212_MOUSE_OPT_X_INV;
+		} else if (IS_ENABLED(CONFIG_PAW3212_ORIENTATION_270)) {
+			mouse_option |= PAW3212_MOUSE_OPT_XY_SWAP |
+					PAW3212_MOUSE_OPT_X_INV;
+		}
 
-    if (!err) {
-        err = pmw3610_set_cpi(dev, config->cpi);
-    }
+		if (IS_ENABLED(CONFIG_PAW3212_12_BIT_MODE)) {
+			mouse_option |= PAW3212_MOUSE_OPT_12BITMODE;
+		}
 
-    if (!err) {
-        err = pmw3610_set_axis(dev, config->swap_xy, config->inv_x, config->inv_y);
-    }
-
-    if (!err) {
-        err = pmw3610_set_downshift_time(dev, PMW3610_REG_RUN_DOWNSHIFT,
-                                         CONFIG_PMW3610_RUN_DOWNSHIFT_TIME_MS);
-    }
-
-    if (!err) {
-        err = pmw3610_set_downshift_time(dev, PMW3610_REG_REST1_DOWNSHIFT,
-                                         CONFIG_PMW3610_REST1_DOWNSHIFT_TIME_MS);
-    }
-
-    if (!err) {
-        err = pmw3610_set_downshift_time(dev, PMW3610_REG_REST2_DOWNSHIFT,
-                                         CONFIG_PMW3610_REST2_DOWNSHIFT_TIME_MS);
-    }
-
-    if (!err) {
-        err = pmw3610_set_sample_time(dev, PMW3610_REG_REST1_RATE,
-                                      CONFIG_PMW3610_REST1_SAMPLE_TIME_MS);
-    }
-
-    if (!err) {
-        err = pmw3610_set_sample_time(dev, PMW3610_REG_REST2_RATE,
-                                      CONFIG_PMW3610_REST2_SAMPLE_TIME_MS);
-    }
-
-    if (!err) {
-        err = pmw3610_set_sample_time(dev, PMW3610_REG_REST3_RATE,
-                                      CONFIG_PMW3610_REST3_SAMPLE_TIME_MS);
-    }
+		err = reg_write(dev, PAW3212_REG_MOUSE_OPTION,
+				mouse_option);
+	}
+	if (!err) {
+		err = reg_write(dev, PAW3212_REG_WRITE_PROTECT, 0);
+	}
 
     if (err) {
         LOG_ERR("Config the sensor failed");
         return err;
     }
 
-    return 0;
+	return 0;
 }
 
-static void pmw3610_async_init(struct k_work *work) {
-    struct k_work_delayable *work2 = (struct k_work_delayable *)work;
-    struct pixart_data *data = CONTAINER_OF(work2, struct pixart_data, init_work);
-    const struct device *dev = data->dev;
 
-    LOG_INF("PMW3610 async init step %d", data->async_init_step);
+static void paw3212_async_init(struct k_work *work)
+{
+	struct paw3212_data *data = CONTAINER_OF(work, struct paw3212_data,
+						 init_work.work);
+	const struct device *dev = data->dev;
 
-    data->err = async_init_fn[data->async_init_step](dev);
-    if (data->err) {
-        LOG_ERR("PMW3610 initialization failed in step %d", data->async_init_step);
-    } else {
-        data->async_init_step++;
+	LOG_DBG("PAW3212 async init step %d", data->async_init_step);
 
-        if (data->async_init_step == ASYNC_INIT_STEP_COUNT) {
-            data->ready = true; // sensor is ready to work
-            LOG_INF("PMW3610 initialized");
-            pmw3610_set_interrupt(dev, true);
-        } else {
-            k_work_schedule(&data->init_work, K_MSEC(async_init_delay[data->async_init_step]));
-        }
-    }
+	data->err = async_init_fn[data->async_init_step](dev);
+	if (data->err) {
+		LOG_ERR("PAW3212 initialization failed");
+	} else {
+		data->async_init_step++;
+
+		if (data->async_init_step == ASYNC_INIT_STEP_COUNT) {
+			data->ready = true;
+			LOG_INF("PAW3212 initialized");
+		} else {
+			k_work_schedule(&data->init_work,
+					K_MSEC(async_init_delay[
+						data->async_init_step]));
+		}
+	}
 }
 
 static int pmw3610_report_data(const struct device *dev) {
@@ -545,186 +524,181 @@ static void pmw3610_work_callback(struct k_work *work) {
     pmw3610_set_interrupt(dev, true);
 }
 
-static int pmw3610_init_irq(const struct device *dev) {
-    int err;
-    struct pixart_data *data = dev->data;
-    const struct pixart_config *config = dev->config;
+static int paw3212_init_irq(const struct device *dev)
+{
+	int err;
+	struct paw3212_data *data = dev->data;
+	const struct paw3212_config *config = dev->config;
 
-    // check readiness of irq gpio pin
-    if (!device_is_ready(config->irq_gpio.port)) {
-        LOG_ERR("IRQ GPIO device not ready");
-        return -ENODEV;
-    }
-
-    // init the irq pin
-    err = gpio_pin_configure_dt(&config->irq_gpio, GPIO_INPUT);
-    if (err) {
-        LOG_ERR("Cannot configure IRQ GPIO");
-        return err;
-    }
-
-    // setup and add the irq callback associated
-    gpio_init_callback(&data->irq_gpio_cb, pmw3610_gpio_callback, BIT(config->irq_gpio.pin));
-
-    err = gpio_add_callback(config->irq_gpio.port, &data->irq_gpio_cb);
-    if (err) {
-        LOG_ERR("Cannot add IRQ GPIO callback");
-    }
-
-    return err;
-}
-
-static int pmw3610_init(const struct device *dev) {
-    struct pixart_data *data = dev->data;
-    const struct pixart_config *config = dev->config;
-    int err;
-
-	if (!spi_is_ready_dt(&config->spi)) {
-		LOG_ERR("%s is not ready", config->spi.bus->name);
+	if (!device_is_ready(config->irq_gpio.port)) {
+		LOG_ERR("IRQ GPIO device not ready");
 		return -ENODEV;
 	}
 
-    // init device pointer
-    data->dev = dev;
+	err = gpio_pin_configure_dt(&config->irq_gpio, GPIO_INPUT);
+	if (err) {
+		LOG_ERR("Cannot configure IRQ GPIO");
+		return err;
+	}
 
-    // init smart algorithm flag;
-    data->sw_smart_flag = false;
+	gpio_init_callback(&data->irq_gpio_cb, irq_handler,
+			   BIT(config->irq_gpio.pin));
 
-    // init trigger handler work
-    k_work_init(&data->trigger_work, pmw3610_work_callback);
+	err = gpio_add_callback(config->irq_gpio.port,
+				&data->irq_gpio_cb);
 
-    // init irq routine
-    err = pmw3610_init_irq(dev);
-    if (err) {
-        return err;
-    }
+	if (err) {
+		LOG_ERR("Cannot add IRQ GPIO callback");
+	}
 
-    // Setup delayable and non-blocking init jobs, including following steps:
-    // 1. power reset
-    // 2. upload initial settings
-    // 3. other configs like cpi, downshift time, sample time etc.
-    // The sensor is ready to work (i.e., data->ready=true after the above steps are finished)
-    k_work_init_delayable(&data->init_work, pmw3610_async_init);
-
-    k_work_schedule(&data->init_work, K_MSEC(async_init_delay[data->async_init_step]));
-
-    return err;
+	return err;
 }
 
-static int pmw3610_attr_set(const struct device *dev, enum sensor_channel chan,
-                            enum sensor_attribute attr, const struct sensor_value *val) {
-    struct pixart_data *data = dev->data;
-    int err;
+static int paw3212_init(const struct device *dev)
+{
+	struct paw3212_data *data = dev->data;
+	const struct paw3212_config *config = dev->config;
+	int err;
 
-    if (unlikely(chan != SENSOR_CHAN_ALL)) {
-        return -ENOTSUP;
-    }
+	/* Assert that negative numbers are processed as expected */
+	__ASSERT_NO_MSG(-1 == expand_s12(0xFFF));
 
-    if (unlikely(!data->ready)) {
-        LOG_DBG("Device is not initialized yet");
-        return -EBUSY;
-    }
+	k_work_init(&data->trigger_handler_work, trigger_handler);
+	data->dev = dev;
 
-    switch ((uint32_t)attr) {
-    case PMW3610_ATTR_CPI:
-        err = pmw3610_set_cpi(dev, PMW3610_SVALUE_TO_CPI(*val));
-        break;
+	if (!spi_is_ready_dt(&config->bus)) {
+		return -ENODEV;
+	}
 
-    case PMW3610_ATTR_RUN_DOWNSHIFT_TIME:
-        err = pmw3610_set_downshift_time(dev, PMW3610_REG_RUN_DOWNSHIFT, PMW3610_SVALUE_TO_TIME(*val));
-        break;
+	if (!device_is_ready(config->cs_gpio.port)) {
+		LOG_ERR("SPI CS device not ready");
+		return -ENODEV;
+	}
 
-    case PMW3610_ATTR_REST1_DOWNSHIFT_TIME:
-        err = pmw3610_set_downshift_time(dev, PMW3610_REG_REST1_DOWNSHIFT, PMW3610_SVALUE_TO_TIME(*val));
-        break;
+	err = gpio_pin_configure_dt(&config->cs_gpio, GPIO_OUTPUT_INACTIVE);
+	if (err) {
+		LOG_ERR("Cannot configure SPI CS GPIO");
+		return err;
+	}
 
-    case PMW3610_ATTR_REST2_DOWNSHIFT_TIME:
-        err = pmw3610_set_downshift_time(dev, PMW3610_REG_REST2_DOWNSHIFT, PMW3610_SVALUE_TO_TIME(*val));
-        break;
+	err = paw3212_init_irq(dev);
+	if (err) {
+		return err;
+	}
 
-    case PMW3610_ATTR_REST1_SAMPLE_TIME:
-        err = pmw3610_set_sample_time(dev, PMW3610_REG_REST1_RATE, PMW3610_SVALUE_TO_TIME(*val));
-        break;
+	k_work_init_delayable(&data->init_work, paw3212_async_init);
 
-    case PMW3610_ATTR_REST2_SAMPLE_TIME:
-        err = pmw3610_set_sample_time(dev, PMW3610_REG_REST2_RATE, PMW3610_SVALUE_TO_TIME(*val));
-        break;
+	k_work_schedule(&data->init_work,
+			K_MSEC(async_init_delay[data->async_init_step]));
 
-    case PMW3610_ATTR_REST3_SAMPLE_TIME:
-        err = pmw3610_set_sample_time(dev, PMW3610_REG_REST3_RATE, PMW3610_SVALUE_TO_TIME(*val));
-        break;
-
-    default:
-        LOG_ERR("Unknown attribute");
-        err = -ENOTSUP;
-    }
-
-    return err;
+	return err;
 }
 
-static const struct sensor_driver_api pmw3610_driver_api = {
-    .attr_set = pmw3610_attr_set,
+static int paw3212_attr_set(const struct device *dev, enum sensor_channel chan,
+			    enum sensor_attribute attr,
+			    const struct sensor_value *val)
+{
+	struct paw3212_data *data = dev->data;
+	int err;
+
+	if (unlikely(chan != SENSOR_CHAN_ALL)) {
+		return -ENOTSUP;
+	}
+
+	if (unlikely(!data->ready)) {
+		LOG_INF("Device is not initialized yet");
+		return -EBUSY;
+	}
+
+	switch ((uint32_t)attr) {
+	case PAW3212_ATTR_CPI:
+		err = update_cpi(dev, PAW3212_SVALUE_TO_CPI(*val));
+		break;
+
+	case PAW3212_ATTR_SLEEP_ENABLE:
+		err = toggle_sleep_modes(dev,
+					 PAW3212_REG_OPERATION_MODE,
+					 PAW3212_REG_CONFIGURATION,
+					 PAW3212_SVALUE_TO_BOOL(*val));
+		break;
+
+	case PAW3212_ATTR_SLEEP1_TIMEOUT:
+		err = update_sleep_timeout(dev,
+					   PAW3212_REG_SLEEP1,
+					   PAW3212_SVALUE_TO_TIME(*val));
+		break;
+
+	case PAW3212_ATTR_SLEEP2_TIMEOUT:
+		err = update_sleep_timeout(dev,
+					   PAW3212_REG_SLEEP2,
+					   PAW3212_SVALUE_TO_TIME(*val));
+		break;
+
+	case PAW3212_ATTR_SLEEP3_TIMEOUT:
+		err = update_sleep_timeout(dev,
+					   PAW3212_REG_SLEEP3,
+					   PAW3212_SVALUE_TO_TIME(*val));
+		break;
+
+	case PAW3212_ATTR_SLEEP1_SAMPLE_TIME:
+		err = update_sample_time(dev,
+					 PAW3212_REG_SLEEP1,
+					 PAW3212_SVALUE_TO_TIME(*val));
+		break;
+
+	case PAW3212_ATTR_SLEEP2_SAMPLE_TIME:
+		err = update_sample_time(dev,
+					 PAW3212_REG_SLEEP2,
+					 PAW3212_SVALUE_TO_TIME(*val));
+		break;
+
+	case PAW3212_ATTR_SLEEP3_SAMPLE_TIME:
+		err = update_sample_time(dev,
+					 PAW3212_REG_SLEEP3,
+					 PAW3212_SVALUE_TO_TIME(*val));
+		break;
+
+	default:
+		LOG_ERR("Unknown attribute");
+		return -ENOTSUP;
+	}
+
+	return err;
+}
+
+static const struct sensor_driver_api paw3212_driver_api = {
+	.sample_fetch = paw3212_sample_fetch,
+	.channel_get  = paw3212_channel_get,
+	.trigger_set  = paw3212_trigger_set,
+	.attr_set     = paw3212_attr_set,
 };
-
-// #if IS_ENABLED(CONFIG_PM_DEVICE)
-// static int pmw3610_pm_action(const struct device *dev, enum pm_device_action action) {
-//     switch (action) {
-//     case PM_DEVICE_ACTION_SUSPEND:
-//         return pmw3610_set_interrupt(dev, false);
-//     case PM_DEVICE_ACTION_RESUME:
-//         return pmw3610_set_interrupt(dev, true);
-//     default:
-//         return -ENOTSUP;
-//     }
-// }
-// #endif // IS_ENABLED(CONFIG_PM_DEVICE)
-// PM_DEVICE_DT_INST_DEFINE(n, pmw3610_pm_action);
 
 #define PMW3610_SPI_MODE (SPI_OP_MODE_MASTER | SPI_WORD_SET(8) | SPI_MODE_CPOL | \
                         SPI_MODE_CPHA | SPI_TRANSFER_MSB)
 
-#define PMW3610_DEFINE(n)                                                                          \
-    static struct pixart_data data##n;                                                             \
-    static const struct pixart_config config##n = {                                                \
-		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
-        .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                           \
-        .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                                       \
-        .swap_xy = DT_PROP(DT_DRV_INST(n), swap_xy),                                               \
-        .inv_x = DT_PROP(DT_DRV_INST(n), invert_x),                                                \
-        .inv_y = DT_PROP(DT_DRV_INST(n), invert_y),                                                \
-        .evt_type = DT_PROP(DT_DRV_INST(n), evt_type),                                             \
-        .x_input_code = DT_PROP(DT_DRV_INST(n), x_input_code),                                     \
-        .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                                     \
-        .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
-        .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),                     \
-    };                                                                                             \
-    DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
-                          CONFIG_INPUT_PMW3610_INIT_PRIORITY, &pmw3610_driver_api);
+#define PAW3212_DEFINE(n)						       \
+	static struct paw3212_data data##n;				       \
+									       \
+	static const struct paw3212_config config##n = {		       \
+		.irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),	       \
+		.bus = {						       \
+			    .bus = DEVICE_DT_GET(DT_INST_BUS(n)),		       \
+				.config = {					       \
+				.frequency = DT_INST_PROP(n, spi_max_frequency),  \
+				.operation = SPI_WORD_SET(8) |		       \
+					         SPI_TRANSFER_MSB |		       \
+							 SPI_MODE_CPOL | SPI_MODE_CPHA,    \
+				.slave = DT_INST_REG_ADDR(n),		       \
+			},						       \
+		},							       \
+		.cs_gpio = SPI_CS_GPIOS_DT_SPEC_GET(DT_DRV_INST(n)),	       \
+	};								       \
+									       \
+	DEVICE_DT_INST_DEFINE(n, paw3212_init, NULL, &data##n, &config##n,     \
+			      POST_KERNEL, CONFIG_SENSOR_INIT_PRIORITY,	       \
+			      &paw3212_driver_api);
 
-DT_INST_FOREACH_STATUS_OKAY(PMW3610_DEFINE)
-
-
-#define GET_PMW3610_DEV(node_id) DEVICE_DT_GET(node_id),
-
-static const struct device *pmw3610_devs[] = {
-    DT_FOREACH_STATUS_OKAY(pixart_pmw3610, GET_PMW3610_DEV)
-};
-
-static int on_activity_state(const zmk_event_t *eh) {
-    struct zmk_activity_state_changed *state_ev = as_zmk_activity_state_changed(eh);
-
-    if (!state_ev) {
-        LOG_WRN("NO EVENT, leaving early");
-        return 0;
-    }
-
-    bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE ? 1 : 0;
-    for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
-        pmw3610_set_performance(pmw3610_devs[i], enable);
-    }
-
-    return 0;
-}
+DT_INST_FOREACH_STATUS_OKAY(PAW3212_DEFINE)
 
 ZMK_LISTENER(zmk_pmw3610_idle_sleeper, on_activity_state);
 ZMK_SUBSCRIPTION(zmk_pmw3610_idle_sleeper, zmk_activity_state_changed);
