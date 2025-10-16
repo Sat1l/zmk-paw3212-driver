@@ -7,8 +7,12 @@
 extern "C" {
 #endif
 
-/* Timings (in us) used in SPI communication. */
-#define T_CLOCK_ON_DELAY_US 300
+/* Timings (in us) defined by spec */
+#define T_NCS_SCLK	1			/* 120 ns */
+#define T_SRX		(20 - T_NCS_SCLK)	/* 20 us */
+#define T_SCLK_NCS_WR	(35 - T_NCS_SCLK)	/* 35 us */
+#define T_SWX		(180 - T_SCLK_NCS_WR)	/* 180 us */
+#define T_SRAD		160			/* 160 us */
 
 /* Sensor registers (addresses) */
 #define PAW3212_REG_PRODUCT_ID		0x00
@@ -81,28 +85,31 @@ extern "C" {
 #define PAW3212_SVALUE_TO_TIME(svalue) ((uint32_t)(svalue).val1)
 #define PAW3212_SVALUE_TO_BOOL(svalue) ((svalue).val1 != 0)
 
-/** @brief Sensor specific attributes of PMW3610. */
-enum pmw3612_attribute {
+/** @brief Sensor specific attributes of PAW3212. */
+enum paw3212_attribute {
 
 	/** Sensor CPI for both X and Y axes. */
 	PAW3212_ATTR_CPI,
 
-	/** Entering time from Run mode to REST1 mode [ms]. */
-	PAW3212_ATTR_RUN_DOWNSHIFT_TIME,
+	/** Enable or disable sleep modes. */
+	PAW3212_ATTR_SLEEP_ENABLE,
 
-	/** Entering time from REST1 mode to REST2 mode [ms]. */
-	PAW3212_ATTR_SLEEP1_DOWNSHIFT_TIME,
+	/** Entering time from Run mode to Sleep1 mode [ms]. */
+	PAW3212_ATTR_SLEEP1_TIMEOUT,
 
-	/** Entering time from REST2 mode to REST3 mode [ms]. */
-	PAW3212_ATTR_SLEEP2_DOWNSHIFT_TIME,
+	/** Entering time from Sleep1 mode to Sleep2 mode [ms]. */
+	PAW3212_ATTR_SLEEP2_TIMEOUT,
 
-	/** Sampling frequency time during REST1 mode [ms]. */
+	/** Entering time from Sleep2 mode to Sleep3 mode [ms]. */
+	PAW3212_ATTR_SLEEP3_TIMEOUT,
+
+	/** Sampling frequency time during Sleep1 mode [ms]. */
 	PAW3212_ATTR_SLEEP1_SAMPLE_TIME,
 
-	/** Sampling frequency time during REST2 mode [ms]. */
+	/** Sampling frequency time during Sleep2 mode [ms]. */
 	PAW3212_ATTR_SLEEP2_SAMPLE_TIME,
 
-	/** Sampling frequency time during REST3 mode [ms]. */
+	/** Sampling frequency time during Sleep3 mode [ms]. */
 	PAW3212_ATTR_SLEEP3_SAMPLE_TIME,
 
 };

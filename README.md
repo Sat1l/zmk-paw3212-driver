@@ -1,40 +1,31 @@
 # PAW3212 driver implementation for ZMK
 
-# !!THIS DOESN'T WORK YET!!
+This driver is a port of the Nordic PAW3212 sensor driver to ZMK, following the same structure and patterns as the PMW3610 ZMK driver.
 
-This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c).
+## Overview
 
-This driver had been tested on [my PMW3610 breakout board](https://github.com/badjeff/pmw3610-pcb).
-
-#### What is different to [inorichi's driver](https://github.com/inorichi/zmk-pmw3610-driver)
-- Compatible to be used on split peripheral shield.
-- Replaced `CONFIG_PMW3610_ORIENTATION_*` with ~~`CONFIG_PMW3610_SWAP_XY` and `PMW3610_INVERT_*`~~ device tree node attributes `swap-xy;`, `invert-x;` and `invert-y;`. Then now, it can used on [leylabella](https://github.com/badjeff/leylabella), which has different sensor breakout pcb orientation on one device.
-- Moved `CONFIG_PMW3610_CPI` to device tree node `.dts/.overlay`. It is now allowed to setup diffeent config for multi-sensor on single shield. In case of building typical mouse shield, we use one movment sensor on bottom, and another sensor for scrolling on top. Those settings could be distinguishable.
-- Features for scroll-mode, snipe-mode, and auto-layer are no longer needed to be provided from sensor driver. Those settings is now configurable in keymap with layer-based `zmk,input-listener`, instead of setup static value in shield config files.
-- Seperating sampling rate and reporting rate. It reports accumulated XY axes displacement between data ready interrupts. You will still feeling lag and jumpy in noisy radio hell, but the cursor traction should being lossless, and predicable in exact terms.
-- Default to use power saving config. Applying shorter-than-default downshift time to PMW3610.
-- Deprecated manual *chip-select*. Refactored to use Zephyr's `spi_transceive_dt()`. That allow the sensor could be attacted to a shared SPI bus, works along with others SPI peripherals, such as display module.
+The PAW3212 is a low-power optical motion tracking sensor with the following features:
+- CPI range: 0-2394 (in steps of 38)
+- 8-bit or 12-bit motion reporting modes
+- Configurable sleep modes for power saving
+- Orientation configuration (90°, 180°, 270° rotation)
 
 ## Installation
 
-Include this project on ZMK's west manifest in `config/west.yml`:
+Include this project in ZMK's west manifest in `config/west.yml`:
 
 ```yml
 manifest:
   remotes:
     ...
-    # START #####
-    - name: badjeff
-      url-base: https://github.com/badjeff
-    # END #######
+    - name: your-remote
+      url-base: https://github.com/your-username
     ...
   projects:
     ...
-    # START #####
-    - name: zmk-pmw3610-driver
-      remote: badjeff
+    - name: zmk-paw3212-driver
+      remote: your-remote
       revision: main
-    # END #######
     ...
   self:
     path: config
@@ -74,27 +65,13 @@ Update `board.overlay` adding the necessary bits (update the pins for your board
 
     trackball: trackball@0 {
         status = "okay";
-        compatible = "pixart,pmw3610";
+        compatible = "pixart,paw3212";
         reg = <0>;
         spi-max-frequency = <2000000>;
         irq-gpios = <&gpio0 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-        cpi = <600>;
-        // swap-xy; /* optional */
-        // invert-x; /* optional */
-        // invert-y; /* optional */
         evt-type = <INPUT_EV_REL>;
         x-input-code = <INPUT_REL_X>;
         y-input-code = <INPUT_REL_Y>;
-
-        force-awake;
-        /* keep the sensor awake while ZMK activity state is ACTIVE,
-           fallback to normal downshift mode after ZMK goes into IDLE / SLEEP mode.
-           thus, the sensor would be a `wakeup-source` */
-
-        force-awake-4ms-mode;
-        /* while force-awake is acitvated, enable this mode to force sampling per 
-           4ms, where the default sampling rate is 8ms. */
-        /* NOTE: apply this mode if you need 250Hz with direct USB connection. */
     };
 };
 
@@ -106,21 +83,54 @@ Update `board.overlay` adding the necessary bits (update the pins for your board
 };
 ```
 
-Enable the driver config in `<shield>.config` file (read the Kconfig file to find out all possible options):
+Enable the driver config in `<shield>.config` file:
 
 ```conf
 CONFIG_SPI=y
 CONFIG_INPUT=y
 CONFIG_ZMK_POINTING=y
-CONFIG_PMW3610=y
-# CONFIG_PMW3610_SWAP_XY=y // <-- deprecated, use swap-xy; instead
-# CONFIG_PMW3610_INVERT_X=y // <-- deprecated, use invert-x; instead
-# CONFIG_PMW3610_INVERT_Y=y // <-- deprecated, use invert-y; instead
-# CONFIG_PMW3610_REPORT_INTERVAL_MIN=12
-# CONFIG_PMW3610_LOG_LEVEL_DBG=y
-# CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS=300 // <--see Troubleshooting
+CONFIG_PAW3212=y
+# CONFIG_PAW3212_ORIENTATION_90=y    # Optional: 90 degree rotation
+# CONFIG_PAW3212_ORIENTATION_180=y   # Optional: 180 degree rotation
+# CONFIG_PAW3212_ORIENTATION_270=y   # Optional: 270 degree rotation
+# CONFIG_PAW3212_12_BIT_MODE=y       # Optional: Enable 12-bit mode (default is 8-bit)
+# CONFIG_PAW3212_LOG_LEVEL_DBG=y     # Optional: Enable debug logging
 ```
 
-## Troubleshooting
+## Features
 
-If you are getting `Incorrect product id 0xFF (expecting 0x3E)!` on `nice_nano_v2` board from the log, you'd want to apply `CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS=1000` in your shield .conf/.overlay file. Due to this driver doesn't offer module dependancy setting, that would ensure external power (to enable VCC pin on board) is ready, the `CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS` would use to add extra one second delay of power up.
+- **Async initialization**: Non-blocking initialization process
+- **ZMK activity integration**: Automatically enables/disables sleep modes based on ZMK activity state
+- **Input subsystem**: Uses Zephyr's input API for seamless integration with ZMK
+- **Power management**: Configurable sleep modes (Sleep1, Sleep2, Sleep3) for power saving
+- **Orientation support**: Hardware-level orientation configuration
+- **12-bit mode**: Optional high-precision reporting mode
+
+## Configuration
+
+The driver supports the following attributes that can be configured at runtime:
+
+- `PAW3212_ATTR_CPI`: Set CPI (Counts Per Inch)
+- `PAW3212_ATTR_SLEEP_ENABLE`: Enable/disable sleep modes
+- `PAW3212_ATTR_SLEEP1_TIMEOUT`: Sleep1 timeout in ms
+- `PAW3212_ATTR_SLEEP2_TIMEOUT`: Sleep2 timeout in ms
+- `PAW3212_ATTR_SLEEP3_TIMEOUT`: Sleep3 timeout in ms
+- `PAW3212_ATTR_SLEEP1_SAMPLE_TIME`: Sleep1 sample time in ms
+- `PAW3212_ATTR_SLEEP2_SAMPLE_TIME`: Sleep2 sample time in ms
+- `PAW3212_ATTR_SLEEP3_SAMPLE_TIME`: Sleep3 sample time in ms
+
+## Differences from Nordic Driver
+
+This ZMK port differs from the original Nordic driver in the following ways:
+
+1. **Input API instead of Sensor API**: Uses Zephyr's `input_report()` instead of the sensor driver API
+2. **ZMK integration**: Integrates with ZMK's activity state management for automatic power saving
+3. **Manual CS control**: Uses manual chip select control via GPIO instead of SPI subsystem CS
+4. **Device tree configuration**: Input codes and event types are configured via device tree
+
+## Credits
+
+Based on:
+- Nordic Semiconductor's PAW3212 sensor driver (nRF Connect SDK)
+- ZMK PMW3610 driver implementation patterns
+- Zephyr RTOS SPI and GPIO APIs

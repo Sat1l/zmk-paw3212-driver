@@ -5,97 +5,38 @@
 # SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
 #
 
-menuconfig PMW3610
-  bool "PMW3610 mouse optical sensor"
+menuconfig PAW3212
+  bool "PAW3212 mouse optical sensor"
   select SPI
   depends on INPUT
-  depends on DT_HAS_PIXART_PMW3610_ENABLED
+  depends on DT_HAS_PIXART_PAW3212_ENABLED
   help
-      Enable PMW3610 mouse optical sensor.
+      Enable PAW3212 mouse optical sensor.
 
-if PMW3610
+if PAW3212
 
-config INPUT_PMW3610_INIT_PRIORITY
-    int "PMW3610 initialization priority"
+config INPUT_PAW3212_INIT_PRIORITY
+    int "PAW3212 initialization priority"
     default INPUT_INIT_PRIORITY
 
-config PMW3610_SWAP_XY
-  bool "Swap the X/Y axis of PMW3610 sensor"
+config PAW3212_ORIENTATION_90
+  bool "PAW3212 sensor 90 degree rotation"
 
-config PMW3610_INVERT_X
-  bool "Invert the X axis of PMW3610 sensor"
+config PAW3212_ORIENTATION_180
+  bool "PAW3212 sensor 180 degree rotation"
 
-config PMW3610_INVERT_Y
-  bool "Invert the Y axis of PMW3610 sensor"
+config PAW3212_ORIENTATION_270
+  bool "PAW3212 sensor 270 degree rotation"
 
-config PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS
-  int "Extra power up init delay (ms)"
-  default 0
+config PAW3212_12_BIT_MODE
+  bool "PAW3212 12-bit mode"
   help
-    Default minimum init power up delay is 10ms.
-    Use this config to postpone init power up sequence if needs longer bootup time.
+    Enable 12-bit reporting mode for increased accuracy.
+    When disabled, sensor uses 8-bit mode.
 
-config PMW3610_REPORT_INTERVAL_MIN
-	int "PMW3610's default minimum report rate"
-	default 0
-	help
-	  Default minimum report interval in milliseconds.
-		Slow down input reporting for hid queue over the air.
-		Turn value down to 8ms to get sharp response if use with USB only.
-
-config PMW3610_SMART_ALGORITHM
-  bool "Enable an algorithm of PMW3610 to enhance surface coverage"
-  default y
-  help
-    Enable the integration of the smart algorithm as the datasheet implementation.
-    The algorithm is used to extend the tracking acrocss a wider range of surfaces
-    such as graniles and tiles.
-
-config PMW3610_RUN_DOWNSHIFT_TIME_MS
-    int "PMW3610's default RUN mode downshift time"
-    default 128
-    range 13 3264
-    help
-      Default RUN mode downshift down time in milliseconds.
-      Time after which sensor goes from RUN to REST1 mode.
-
-config PMW3610_REST1_DOWNSHIFT_TIME_MS
-    int "PMW3610's default REST1 mode downshift time"
-    default 5000
-    help
-      Default REST1 mode downshift down time in milliseconds.
-      Time after which sensor goes from REST1 to REST2 mode.
-
-config PMW3610_REST2_DOWNSHIFT_TIME_MS
-    int "PMW3610's default REST2 mode downshift time"
-    default 17000
-    help
-      Default REST2 mode downshift down time in milliseconds.
-      Time after which sensor goes from REST2 to REST3 mode.
-
-config PMW3610_REST1_SAMPLE_TIME_MS
-    int "PMW3610's sample time in REST1 stage"
-    default 40
-    # range 10 2550
-    help
-      Default REST1 mode sample period in millisecond
-
-config PMW3610_REST2_SAMPLE_TIME_MS
-    int "PMW3610's sample time in REST2 stage"
-    default 100
-    # range 10 2550
-    help
-      Default REST2 mode sample period in millisecond.
-
-config PMW3610_REST3_SAMPLE_TIME_MS
-    int "PMW3610's sample time in REST3 stage"
-    default 500
-    # range 10 2550
-    help
-      Default REST2 mode sample period in millisecond.
-
-module = PMW3610
-module-str = PMW3610
+module = PAW3212
+module-str = PAW3212
 source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
 
+endif #PAW3212
 endif #PMW3610
