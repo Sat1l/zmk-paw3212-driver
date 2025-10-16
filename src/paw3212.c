@@ -12,48 +12,39 @@
 #include <zephyr/pm/device.h>
 #include <zmk/keymap.h>
 #include <zmk/events/activity_state_changed.h>
-#include "pmw3610.h"
+#include "paw3212.h"
 
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(pmw3610, CONFIG_PMW3610_LOG_LEVEL);
+LOG_MODULE_REGISTER(paw3212, CONFIG_PAW3212_LOG_LEVEL);
 
 //////// Sensor initialization steps definition //////////
 // init is done in non-blocking manner (i.e., async), a //
 // delayable work is defined for this purpose           //
-enum pmw3610_init_step {
-    ASYNC_INIT_STEP_POWER_UP,  // reset cs line and assert power-up reset
-    ASYNC_INIT_STEP_CLEAR_OB1, // clear observation1 register for self-test check
-    ASYNC_INIT_STEP_CHECK_OB1, // check the value of observation1 register after self-test check
-    ASYNC_INIT_STEP_CONFIGURE, // set other registes like cpi and donwshift time (run, rest1, rest2)
-                               // and clear motion registers
+enum paw3212_init_step {
+	ASYNC_INIT_STEP_POWER_UP,
+	ASYNC_INIT_STEP_VERIFY_ID,
+	ASYNC_INIT_STEP_CONFIGURE,
 
-    ASYNC_INIT_STEP_COUNT // end flag
+	ASYNC_INIT_STEP_COUNT
 };
 
 /* Timings (in ms) needed in between steps to allow each step finishes succussfully. */
 // - Since MCU is not involved in the sensor init process, i is allowed to do other tasks.
 //   Thus, k_sleep or delayed schedule can be used.
 static const int32_t async_init_delay[ASYNC_INIT_STEP_COUNT] = {
-    [ASYNC_INIT_STEP_POWER_UP] = 10 + CONFIG_PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS, // >10ms needed
-    [ASYNC_INIT_STEP_CLEAR_OB1] = 200, // 150 us required, test shows too short,
-                                       // also power-up reset is added in this step, thus using 50 ms
-    [ASYNC_INIT_STEP_CHECK_OB1] = 50,  // 10 ms required in spec,
-                                       // test shows too short,
-                                       // especially when integrated with display,
-                                       // > 50ms is needed
-    [ASYNC_INIT_STEP_CONFIGURE] = 0,
+	[ASYNC_INIT_STEP_POWER_UP]  = 10,
+	[ASYNC_INIT_STEP_VERIFY_ID] = 0,
+	[ASYNC_INIT_STEP_CONFIGURE] = 0,
 };
 
-static int pmw3610_async_init_power_up(const struct device *dev);
-static int pmw3610_async_init_clear_ob1(const struct device *dev);
-static int pmw3610_async_init_check_ob1(const struct device *dev);
-static int pmw3610_async_init_configure(const struct device *dev);
+static int paw3212_async_init_power_up(const struct device *dev);
+static int paw3212_async_init_verify_id(const struct device *dev);
+static int paw3212_async_init_configure(const struct device *dev);
 
-static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *dev) = {
-    [ASYNC_INIT_STEP_POWER_UP] = pmw3610_async_init_power_up,
-    [ASYNC_INIT_STEP_CLEAR_OB1] = pmw3610_async_init_clear_ob1,
-    [ASYNC_INIT_STEP_CHECK_OB1] = pmw3610_async_init_check_ob1,
-    [ASYNC_INIT_STEP_CONFIGURE] = pmw3610_async_init_configure,
+static int (* const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *dev) = {
+	[ASYNC_INIT_STEP_POWER_UP]  = paw3212_async_init_power_up,
+	[ASYNC_INIT_STEP_VERIFY_ID] = paw3212_async_init_verify_id,
+	[ASYNC_INIT_STEP_CONFIGURE] = paw3212_async_init_configure,
 };
 
 //////// Function definitions //////////
@@ -90,66 +81,53 @@ static int pmw3610_write(const struct device *dev, uint8_t reg, uint8_t val) {
     if (unlikely(err != 0)) {
         return err;
     }
-    
+
     pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_DISABLE);
     return 0;
 }
 
-static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi) {
-    /* Set resolution with CPI step of 200 cpi
-     * 0x1: 200 cpi (minimum cpi)
-     * 0x2: 400 cpi
-     * 0x3: 600 cpi
-     * :
-     */
+static int paw3212_set_cpi(const struct device *dev, uint32_t cpi)
+{
+	int err;
 
-    if ((cpi > PMW3610_MAX_CPI) || (cpi < PMW3610_MIN_CPI)) {
-        LOG_ERR("CPI value %u out of range", cpi);
-        return -EINVAL;
-    }
+	if ((cpi > PAW3212_CPI_MAX) || (cpi < PAW3212_CPI_MIN)) {
+		LOG_ERR("CPI %" PRIu32 " out of range", cpi);
+		return -EINVAL;
+	}
 
-    uint8_t value;
-    int err = pmw3610_read_reg(dev, PMW3610_REG_RES_STEP, &value);
-    if (err) {
-        LOG_ERR("Can't read res step %d", err);
-        return err;
-    }
-    LOG_INF("Get res step register (reg value 0x%x)", value);
+	uint8_t regval = cpi / PAW3212_CPI_STEP;
 
-    // Convert CPI to register value
-    // Set prefered RES_STEP
-    //   BIT 4-0: CPI
-    uint8_t cpi_val = cpi / 200;
-    value = (value & 0xE0) | (cpi_val & 0x1F);
-    LOG_INF("Setting CPI to %u (reg value 0x%x)", cpi, value);
+	LOG_DBG("Set CPI: %u (requested: %u, reg:0x%" PRIx8 ")",
+		regval * PAW3212_CPI_STEP, cpi, regval);
 
-    /* set the cpi */
-    uint8_t addr[] = {0x7F, PMW3610_REG_RES_STEP, 0x7F};
-    uint8_t data[] = {0xFF, value, 0x00};
+	err = reg_write(dev, PAW3212_REG_WRITE_PROTECT, PAW3212_WPMAGIC);
+	if (err) {
+		LOG_ERR("Cannot disable write protect");
+		return err;
+	}
 
-	pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
-	k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
+	err = reg_write(dev, PAW3212_REG_CPI_X, regval);
+	if (err) {
+		LOG_ERR("Failed to change x CPI");
+		return err;
+	}
 
-    /* Write data */
-    for (size_t i = 0; i < sizeof(data); i++) {
-        err = pmw3610_write_reg(dev, addr[i], data[i]);
-        if (err) {
-            LOG_ERR("Burst write failed on SPI write (data)");
-            break;
-        }
-    }
-    pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_DISABLE);
+	err = reg_write(dev, PAW3212_REG_CPI_Y, regval);
+	if (err) {
+		LOG_ERR("Failed to change y CPI");
+		return err;
+	}
 
-    if (err) {
-        LOG_ERR("Failed to set CPI");
-        return err;
-    }
+	err = reg_write(dev, PAW3212_REG_WRITE_PROTECT, 0);
+	if (err) {
+		LOG_ERR("Cannot enable write protect");
+	}
 
-    return 0;
+	return err;
 }
 
 static int pmw3610_set_axis(const struct device *dev, bool swap_xy, bool inv_x, bool inv_y) {
-    LOG_INF("Setting axis swap_xy: %s inv_x: %s inv_y: %s", 
+    LOG_INF("Setting axis swap_xy: %s inv_x: %s inv_y: %s",
             swap_xy ? "yes" : "no", inv_x ? "yes" : "no", inv_y ? "yes" : "no");
 
     uint8_t value;
@@ -301,7 +279,7 @@ static int pmw3610_set_performance(const struct device *dev, bool enabled) {
         }
         LOG_INF("Get performance register (reg value 0x%x)", value);
 
-        // Set prefered RUN RATE        
+        // Set prefered RUN RATE
         //   BIT 3:   VEL_RUNRATE    0x0: 8ms; 0x1 4ms;
         //   BIT 2:   POSHI_RUN_RATE 0x0: 8ms; 0x1 4ms;
         //   BIT 1-0: POSLO_RUN_RATE 0x0: 8ms; 0x1 4ms; 0x2 2ms; 0x4 Reserved
@@ -497,7 +475,7 @@ static int pmw3610_report_data(const struct device *dev) {
     LOG_DBG("x/y: %d/%d", x, y);
 
 #ifdef CONFIG_PMW3610_SMART_ALGORITHM
-    int16_t shutter = ((int16_t)(buf[PMW3610_SHUTTER_H_POS] & 0x01) << 8) 
+    int16_t shutter = ((int16_t)(buf[PMW3610_SHUTTER_H_POS] & 0x01) << 8)
                     + buf[PMW3610_SHUTTER_L_POS];
     if (data->sw_smart_flag && shutter < 45) {
         pmw3610_write(dev, 0x32, 0x00);
