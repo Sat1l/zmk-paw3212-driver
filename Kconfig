@@ -39,4 +39,3 @@ module-str = PAW3212
 source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
 
 endif #PAW3212
-endif #PMW3610
